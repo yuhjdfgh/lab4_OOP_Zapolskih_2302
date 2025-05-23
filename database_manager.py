@@ -1,110 +1,140 @@
-import psycopg2
-
-def get_connection():
-    return psycopg2.connect(dbname="ooptry3", user="postgres", password="124512451245", host="localhost", port="5432")
+from sqlalchemy.orm import Session
+from models import SessionLocal, ArtObject, Painting, Sculpture
 
 def create(table, params):
-    conn = get_connection()
-    cur = conn.cursor()
+    db = SessionLocal()
     try:
-        cur.execute("INSERT INTO art_object (title, author) VALUES (%s, %s) RETURNING id", (params[0], params[1]))
-        art_id = cur.fetchone()[0]
+        art_object = ArtObject(title=params[0], author=params[1])
+        db.add(art_object)
+        db.flush()
         
         if table == 'painting':
-            cur.execute("INSERT INTO painting (art_object_id, size, type_color) VALUES (%s, %s, %s)", (art_id, int(params[2]), params[3]))
+            painting = Painting(
+                size=int(params[2]),
+                type_color=params[3],
+                art_object_id=art_object.id
+            )
+            db.add(painting)
         else:
-            cur.execute("INSERT INTO sculpture (art_object_id, weight, material) VALUES (%s, %s, %s)", (art_id, float(params[2]), params[3]))
-        conn.commit()
-        return art_id
+            sculpture = Sculpture(
+                weight=float(params[2]),
+                material=params[3],
+                art_object_id=art_object.id
+            )
+            db.add(sculpture)
+        
+        db.commit()
+        return art_object.id
     except Exception as e:
-        conn.rollback()
+        db.rollback()
         raise e
     finally:
-        cur.close()
-        conn.close()
-
-def read(table, id):
-    conn = get_connection()
-    cur = conn.cursor()
-    try:
-        if table == 'painting':
-            cur.execute("""
-                SELECT a.id, a.title, a.author, p.size, p.type_color 
-                FROM art_object a
-                JOIN painting p ON a.id = p.art_object_id
-                WHERE a.id = %s
-            """, (id,))
-        else:
-            cur.execute("""
-                SELECT a.id, a.title, a.author, s.weight, s.material 
-                FROM art_object a
-                JOIN sculpture s ON a.id = s.art_object_id
-                WHERE a.id = %s
-            """, (id,))  
-        return cur.fetchone()
-    finally:
-        cur.close()
-        conn.close()
-
-def update(table, params):
-    conn = get_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute("UPDATE art_object SET title = %s, author = %s WHERE id = %s", (params[1], params[2], params[0]))
-        if table == 'painting':
-            cur.execute("UPDATE painting SET size = %s, type_color = %s WHERE art_object_id = %s", (int(params[3]), params[4], params[0]))
-        else:
-            cur.execute("UPDATE sculpture SET weight = %s, material = %s WHERE art_object_id = %s", (float(params[3]), params[4], params[0]))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        cur.close()
-        conn.close()
-
-def delete(table, id):
-    conn = get_connection()
-    cur = conn.cursor()
-    try:
-        if table == 'painting':
-            cur.execute("DELETE FROM painting WHERE art_object_id = %s", (id,))
-        else:
-            cur.execute("DELETE FROM sculpture WHERE art_object_id = %s", (id,))
-        cur.execute("DELETE FROM art_object WHERE id = %s", (id,))
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        cur.close()
-        conn.close()
+        db.close()
 
 def get_all_paintings():
-    conn = get_connection()
+    db = SessionLocal()
     try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT a.id, a.title, a.author, p.size, p.type_color 
-                FROM art_object a
-                JOIN painting p ON a.id = p.art_object_id
-                ORDER BY a.id
-            """)
-            return cur.fetchall()
+        paintings = db.query(ArtObject, Painting)\
+            .join(Painting, ArtObject.id == Painting.art_object_id)\
+            .all()
+        
+        return [
+            (art.id, art.title, art.author, painting.size, painting.type_color)
+            for art, painting in paintings
+        ]
     finally:
-        conn.close()
+        db.close()
 
 def get_all_sculptures():
-    conn = get_connection()
+    db = SessionLocal()
     try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT a.id, a.title, a.author, s.weight, s.material 
-                FROM art_object a
-                JOIN sculpture s ON a.id = s.art_object_id
-                ORDER BY a.id
-            """)
-            return cur.fetchall()
+        sculptures = db.query(ArtObject, Sculpture)\
+            .join(Sculpture, ArtObject.id == Sculpture.art_object_id)\
+            .all()
+        
+        return [
+            (art.id, art.title, art.author, sculpture.weight, sculpture.material)
+            for art, sculpture in sculptures
+        ]
     finally:
-        conn.close()
+        db.close()
 
+def read(table, id):
+    db = SessionLocal()
+    try:
+        if table == 'painting':
+            result = db.query(
+                ArtObject.title,
+                ArtObject.author,
+                Painting.size,
+                Painting.type_color
+            ).join(
+                Painting, ArtObject.id == Painting.art_object_id
+            ).filter(
+                ArtObject.id == id
+            ).first()
+            
+            if result:
+                return result
+        
+        else:
+            result = db.query(
+                ArtObject.title,
+                ArtObject.author,
+                Sculpture.weight,
+                Sculpture.material
+            ).join(
+                Sculpture, ArtObject.id == Sculpture.art_object_id
+            ).filter(
+                ArtObject.id == id
+            ).first()
+            
+            if result:
+                return result  # (title, author, weight, material)
+        
+        return None
+    finally:
+        db.close()
+
+def update(table, params):
+    db = SessionLocal()
+    try:
+        art_object = db.query(ArtObject).get(params[0])
+        if art_object:
+            art_object.title = params[1]
+            art_object.author = params[2]
+            
+            if table == 'painting':
+                painting = db.query(Painting)\
+                    .filter(Painting.art_object_id == params[0])\
+                    .first()
+                if painting:
+                    painting.size = int(params[3])
+                    painting.type_color = params[4]
+            else:
+                sculpture = db.query(Sculpture)\
+                    .filter(Sculpture.art_object_id == params[0])\
+                    .first()
+                if sculpture:
+                    sculpture.weight = float(params[3])
+                    sculpture.material = params[4]
+            
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()
+
+def delete(table, id):
+    db = SessionLocal()
+    try:
+        art_object = db.query(ArtObject).get(id)
+        if art_object:
+            db.delete(art_object)
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()
